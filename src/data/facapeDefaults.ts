@@ -1,6 +1,23 @@
-import type { DisciplineKey, ExamItem, PblCase, ScheduleEventRow } from '@/types';
+import type {
+  DisciplineAbsence,
+  DisciplineKey,
+  ExamItem,
+  PblCase,
+  ScheduleEventRow,
+} from '@/types';
 
 export const PLEXO_ICON_URL = 'https://i.postimg.cc/C51vVfLV/1787891800329(1).png';
+
+// Deterministic hidden sync record inside urgent_tasks so ALL app state syncs via Supabase
+export const CLOUD_SYNC_ROW_ID = '00000000-0000-4000-8000-000000000001';
+export const CLOUD_SYNC_PREFIX = '__PLEXO_SYNC_V2__:';
+
+export const POMODORO_PRESETS = [
+  { label: '25 min', minutes: 25, kind: 'focus' as const },
+  { label: '50 min', minutes: 50, kind: 'focus' as const },
+  { label: '15 min', minutes: 15, kind: 'focus' as const },
+  { label: 'Pausa 5m', minutes: 5, kind: 'break' as const },
+];
 
 export const DAYS_SHORT = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'] as const;
 export const DAYS_FULL_MON_FIRST = [
@@ -208,6 +225,29 @@ export function getTodayMonIndex(date: Date = new Date()): number {
   return (date.getDay() + 6) % 7; // 0 = Seg ... 6 = Dom
 }
 
+export function playGentleChime() {
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(528, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(792, ctx.currentTime + 0.25);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.7);
+  } catch {
+    // Audio blocked or unsupported
+  }
+}
+
 // All 22 real FACAPE 2º Período exams preserved verbatim from the original Plexo
 export const INITIAL_FACAPE_EXAMS: ExamItem[] = [
   // Setembro
@@ -238,7 +278,6 @@ export const INITIAL_FACAPE_EXAMS: ExamItem[] = [
   { id: 'facape-2p-22', date: '2026-12-18', title: 'AV Final CIS', period: 'Manhã', discipline: 'CIS', term: '2º Período' },
 ];
 
-// Initial PBL study cases seeded from her current active studies (fully editable/deletable)
 export const INITIAL_PBL_CASES: PblCase[] = [
   {
     id: 'pbl-tutoria-24',
@@ -288,7 +327,17 @@ export const INITIAL_PBL_CASES: PblCase[] = [
   },
 ];
 
-// Offline fallback of her FACAPE weekly schedule (only if Supabase is unreachable and cache is empty)
+// Default Faltômetro for her FACAPE disciplines (limits easily editable)
+export const INITIAL_ABSENCES: DisciplineAbsence[] = [
+  { discipline: 'UBS', maxAllowed: 4, entries: [] },
+  { discipline: 'Tutoria', maxAllowed: 4, entries: [] },
+  { discipline: 'HAMA', maxAllowed: 4, entries: [] },
+  { discipline: 'MISCO', maxAllowed: 4, entries: [] },
+  { discipline: 'TBL', maxAllowed: 4, entries: [] },
+  { discipline: 'EMIS', maxAllowed: 4, entries: [] },
+  { discipline: 'Morfo', maxAllowed: 4, entries: [] },
+];
+
 export const FALLBACK_SCHEDULE: ScheduleEventRow[] = [
   { id: 'fa08deb5-998e-4019-9cae-3907a3ba95f6', day: 0, start_time: '08:00', end_time: '11:00', category: 'UBS', title: 'UBS', custom_color: null },
   { id: '5074036d-6179-4a2d-9cb9-1ab8383eeace', day: 1, start_time: '13:20', end_time: '17:20', category: 'Tutoria', title: 'Tutoria', custom_color: null },

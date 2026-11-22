@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   Clock,
   Check,
@@ -9,6 +10,7 @@ import {
   Pencil,
   Award,
   ListChecks,
+  Calculator,
 } from 'lucide-react';
 import { usePlexo } from '@/context/PlexoContext';
 import { BottomSheet } from '@/components/ui/BottomSheet';
@@ -28,19 +30,20 @@ const WEEKDAY_HEADERS = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 const PERIODS: ExamPeriod[] = ['Manhã', 'Tarde', 'Noite'];
 
 export default function ProvasTab() {
-  const { exams, setExams, currentTerm } = usePlexo();
+  const { exams, setExams, currentTerm, showToast } = usePlexo();
   const today = new Date();
   const todayStr = getLocalDateString(today);
 
-  // Fixes the old September bug: always starts on the CURRENT month!
   const [viewMonth, setViewMonth] = useState(() => ({
     year: today.getFullYear(),
     month: today.getMonth(),
   }));
   const [selectedDayStr, setSelectedDayStr] = useState<string | null>(null);
   const [termFilter, setTermFilter] = useState<string>('Todos');
+  const [boletimOpen, setBoletimOpen] = useState<boolean>(false);
+  const [targetAvg, setTargetAvg] = useState<number>(7.0);
 
-  // Detail sheet (grade + checklist + notes)
+  // Detail sheet
   const [activeExamId, setActiveExamId] = useState<string | null>(null);
   const [newCheckItem, setNewCheckItem] = useState('');
 
@@ -75,6 +78,36 @@ export default function ProvasTab() {
     const sum = gradedExams.reduce((acc, e) => acc + (e.grade || 0), 0);
     return (sum / gradedExams.length).toFixed(1);
   }, [gradedExams]);
+
+  // Boletim & FACAPE Grade Simulator grouped by discipline (excludes Devolutiva / Entrega / Final from base count when calculating AV1-AV3)
+  const disciplineSummaries = useMemo(() => {
+    const groups = new Map<DisciplineKey, ExamItem[]>();
+    for (const ex of filteredExams) {
+      const lower = ex.title.toLowerCase();
+      if (lower.includes('devolutiva') || lower.startsWith('entrega')) continue;
+      if (!groups.has(ex.discipline)) groups.set(ex.discipline, []);
+      groups.get(ex.discipline)!.push(ex);
+    }
+
+    return Array.from(groups.entries()).map(([discipline, list]) => {
+      const regularExams = list.filter((e) => !e.title.toLowerCase().includes('final'));
+      const graded = regularExams.filter((e) => typeof e.grade === 'number');
+      const ungraded = regularExams.filter((e) => typeof e.grade !== 'number');
+      const sum = graded.reduce((acc, e) => acc + (e.grade || 0), 0);
+      const avg = graded.length > 0 ? sum / graded.length : null;
+      const totalEvaluations = Math.max(regularExams.length, graded.length);
+      const neededTotal = targetAvg * totalEvaluations - sum;
+      const neededEach = ungraded.length > 0 ? neededTotal / ungraded.length : null;
+
+      return {
+        discipline,
+        graded,
+        ungradedCount: ungraded.length,
+        avg,
+        neededEach,
+      };
+    });
+  }, [filteredExams, targetAvg]);
 
   const daysInMonth = new Date(viewMonth.year, viewMonth.month + 1, 0).getDate();
   const firstDay = new Date(viewMonth.year, viewMonth.month, 1).getDay();
@@ -187,9 +220,12 @@ export default function ProvasTab() {
     setExams((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   };
 
-  const deleteExam = (id: string) => {
-    setExams((prev) => prev.filter((e) => e.id !== id));
+  const deleteExam = (ex: ExamItem) => {
+    setExams((prev) => prev.filter((e) => e.id !== ex.id));
     setActiveExamId(null);
+    showToast(`"${ex.title}" removida`, () => {
+      setExams((prev) => [...prev, ex]);
+    });
   };
 
   const addChecklistTopic = () => {
@@ -218,7 +254,7 @@ export default function ProvasTab() {
         <div>
           <p className="text-xs font-medium text-muted">
             {upcomingExams.length} prova{upcomingExams.length === 1 ? '' : 's'} pela frente
-            {averageGrade && ` • Média ${averageGrade}`}
+            {averageGrade && ` • Média geral ${averageGrade}`}
           </p>
           <h1 className="font-serif text-3xl text-ink tracking-tight leading-tight">
             Provas & Notas
@@ -251,6 +287,95 @@ export default function ProvasTab() {
               {term}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Boletim & FACAPE Grade Simulator */}
+      {disciplineSummaries.length > 0 && (
+        <div className="plexo-card overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setBoletimOpen((v) => !v)}
+            className="w-full px-4 py-3 flex items-center justify-between gap-2 text-left hover:bg-surface2/40 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Calculator size={15} className="text-accent" />
+              <span className="text-xs font-semibold text-ink">
+                Boletim & Quanto preciso para média {targetAvg.toFixed(1)}
+              </span>
+            </div>
+            <ChevronDown
+              size={16}
+              className={`text-muted transition-transform ${boletimOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
+
+          {boletimOpen && (
+            <div className="px-4 pb-4 pt-2 border-t border-line space-y-3">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">Meta de aprovação:</span>
+                <div className="flex gap-1">
+                  {[6.0, 7.0, 8.0].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setTargetAvg(val)}
+                      className={`px-2 py-0.5 rounded font-mono text-[11px] font-semibold border ${
+                        targetAvg === val
+                          ? 'bg-accentSoft border-accent text-accent'
+                          : 'bg-surface2 border-line text-muted'
+                      }`}
+                    >
+                      {val.toFixed(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {disciplineSummaries.map((row) => {
+                  const statusLabel = (() => {
+                    if (row.graded.length === 0) {
+                      return 'Toque nas provas abaixo para lançar suas notas';
+                    }
+                    if (row.ungradedCount === 0) {
+                      return (row.avg || 0) >= targetAvg
+                        ? `Média ${row.avg!.toFixed(1)} — Aprovada!`
+                        : `Média ${row.avg!.toFixed(1)} — Atenção para Final`;
+                    }
+                    if (row.neededEach !== null && row.neededEach <= 0) {
+                      return 'Já atingiu os pontos para passar!';
+                    }
+                    if (row.neededEach !== null && row.neededEach > 10) {
+                      return `Precisa > 10 nas restantes (${row.ungradedCount} aberta${
+                        row.ungradedCount > 1 ? 's' : ''
+                      })`;
+                    }
+                    return `Precisa de ${row.neededEach!.toFixed(1)} em média nas ${
+                      row.ungradedCount
+                    } prova${row.ungradedCount > 1 ? 's' : ''} restante${
+                      row.ungradedCount > 1 ? 's' : ''
+                    }`;
+                  })();
+
+                  return (
+                    <div
+                      key={row.discipline}
+                      className="p-3 rounded-xl bg-surface2/70 border border-line"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <DisciplineBadge category={row.discipline} />
+                        <span className="font-mono text-xs font-bold text-ink tabular-nums">
+                          {row.avg !== null ? `Média ${row.avg.toFixed(1)}` : 'Sem notas'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-ink2 mt-1.5">{statusLabel}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -289,7 +414,6 @@ export default function ProvasTab() {
           </button>
         </div>
 
-        {/* Weekday Headers */}
         <div className="grid grid-cols-7 mb-1.5">
           {WEEKDAY_HEADERS.map((d, i) => (
             <div key={i} className="text-center text-[10px] font-semibold text-muted py-1">
@@ -298,16 +422,16 @@ export default function ProvasTab() {
           ))}
         </div>
 
-        {/* Calendar Grid */}
         <div className="grid grid-cols-7 gap-y-1">
           {Array.from({ length: firstDay }, (_, i) => (
             <div key={`empty-${i}`} />
           ))}
           {Array.from({ length: daysInMonth }, (_, i) => {
             const day = i + 1;
-            const dateStr = `${viewMonth.year}-${String(viewMonth.month + 1).padStart(2, '0')}-${String(
-              day
-            ).padStart(2, '0')}`;
+            const dateStr = `${viewMonth.year}-${String(viewMonth.month + 1).padStart(
+              2,
+              '0'
+            )}-${String(day).padStart(2, '0')}`;
             const dayExams = examsByDateMap[dateStr] || [];
             const isToday = dateStr === todayStr;
             const isSelected = selectedDayStr === dateStr;
@@ -418,7 +542,7 @@ export default function ProvasTab() {
                       {typeof ex.grade === 'number' ? (
                         <span
                           className={`font-mono text-xs font-bold px-2 py-0.5 rounded-lg tabular-nums ${
-                            ex.grade >= 7
+                            ex.grade >= targetAvg
                               ? 'bg-emerald-500/15 text-emerald-500'
                               : 'bg-rose-500/15 text-rose-500'
                           }`}
@@ -447,7 +571,7 @@ export default function ProvasTab() {
         )}
       </div>
 
-      {/* Upcoming Timeline (all months ahead) */}
+      {/* Upcoming Timeline */}
       <div className="plexo-card p-4">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-ink">
@@ -525,7 +649,7 @@ export default function ProvasTab() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => deleteExam(activeExam.id)}
+                  onClick={() => deleteExam(activeExam)}
                   aria-label="Excluir prova"
                   className="plexo-btn-ghost !py-1.5 !px-2.5 text-xs text-danger border-danger/30 hover:bg-danger/10"
                 >
@@ -534,7 +658,6 @@ export default function ProvasTab() {
               </div>
             </div>
 
-            {/* Grade input */}
             <div className="p-3.5 rounded-2xl bg-surface2 border border-line">
               <label className="text-xs font-semibold text-ink2 flex items-center gap-1.5 mb-2">
                 <Award size={14} className="text-accent" />
@@ -562,16 +685,17 @@ export default function ProvasTab() {
                 {typeof activeExam.grade === 'number' && (
                   <span
                     className={`text-xs font-semibold ${
-                      activeExam.grade >= 7 ? 'text-emerald-400' : 'text-warm'
+                      activeExam.grade >= targetAvg ? 'text-emerald-500' : 'text-warm'
                     }`}
                   >
-                    {activeExam.grade >= 7 ? 'Acima da média (≥ 7,0)' : 'Atenção (< 7,0)'}
+                    {activeExam.grade >= targetAvg
+                      ? `Acima da média (≥ ${targetAvg.toFixed(1)})`
+                      : `Atenção (< ${targetAvg.toFixed(1)})`}
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Study checklist for this exam */}
             <div>
               <label className="text-xs font-semibold text-ink2 block mb-2">
                 Tópicos para revisar
@@ -649,7 +773,6 @@ export default function ProvasTab() {
               )}
             </div>
 
-            {/* Notes */}
             <div>
               <label className="text-xs font-semibold text-ink2 block mb-1.5">
                 Observações (sala, referências, lembretes)

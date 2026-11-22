@@ -115,6 +115,14 @@ input[type='number']::-webkit-outer-spin-button {
     border-radius: 16px;
   }
 
+  [data-compact='true'] .plexo-card {
+    border-radius: 13px;
+  }
+
+  [data-compact='true'] main {
+    font-size: 0.94rem;
+  }
+
   .plexo-input {
     background-color: var(--surface-2);
     border: 1px solid var(--border);

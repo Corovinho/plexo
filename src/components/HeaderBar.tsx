@@ -1,14 +1,20 @@
 import { useState } from 'react';
-import { Sun, Moon, SlidersHorizontal, Heart } from 'lucide-react';
+import { Sun, Moon, SlidersHorizontal, Heart, Pause, Play, Timer } from 'lucide-react';
 import { usePlexo } from '@/context/PlexoContext';
-import { PLEXO_ICON_URL } from '@/data/facapeDefaults';
+import { PLEXO_ICON_URL, getDisciplineHex } from '@/data/facapeDefaults';
 
 interface HeaderBarProps {
   onOpenSettings: () => void;
+  onOpenPomodoro: () => void;
+  isOnPomodoroView: boolean;
 }
 
-export function HeaderBar({ onOpenSettings }: HeaderBarProps) {
-  const { theme, setTheme, currentTerm, overallSync } = usePlexo();
+export function HeaderBar({
+  onOpenSettings,
+  onOpenPomodoro,
+  isOnPomodoroView,
+}: HeaderBarProps) {
+  const { theme, setTheme, currentTerm, overallSync, pomodoro } = usePlexo();
   const [tapCount, setTapCount] = useState(0);
   const [showLoveToast, setShowLoveToast] = useState(false);
 
@@ -23,34 +29,38 @@ export function HeaderBar({ onOpenSettings }: HeaderBarProps) {
     }
   };
 
+  const mins = String(Math.floor(pomodoro.secondsLeft / 60)).padStart(2, '0');
+  const secs = String(pomodoro.secondsLeft % 60).padStart(2, '0');
+  const showMiniPomo = pomodoro.isActiveSession && !isOnPomodoroView;
+
   return (
     <header className="sticky top-0 z-30 bg-canvas/85 backdrop-blur-md border-b border-line">
       <div className="max-w-xl mx-auto px-4 h-14 flex items-center justify-between gap-3">
         <button
           type="button"
           onClick={handleLogoTap}
-          className="flex items-center gap-2.5 text-left group focus:outline-none"
+          className="flex items-center gap-2.5 text-left group focus:outline-none min-w-0"
         >
           <img
             src={PLEXO_ICON_URL}
             alt="Plexo"
-            className="w-8 h-8 rounded-xl object-cover ring-1 ring-lineStrong"
+            className="w-8 h-8 rounded-xl object-cover ring-1 ring-lineStrong shrink-0"
           />
-          <div className="leading-none">
+          <div className="leading-none min-w-0">
             <div className="flex items-baseline gap-1.5">
               <span className="font-serif text-[22px] tracking-tight text-ink">Plexo</span>
-              <span className="text-[10px] font-medium uppercase tracking-wider text-muted px-1.5 py-0.5 rounded-md bg-surface2 border border-line">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted px-1.5 py-0.5 rounded-md bg-surface2 border border-line truncate">
                 FACAPE • {currentTerm}
               </span>
             </div>
           </div>
         </button>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 shrink-0">
           <span
             title={
               overallSync === 'synced'
-                ? 'Sincronizado na nuvem'
+                ? 'Tudo sincronizado na nuvem'
                 : overallSync === 'syncing'
                 ? 'Sincronizando...'
                 : 'Modo offline (salvo localmente)'
@@ -85,6 +95,37 @@ export function HeaderBar({ onOpenSettings }: HeaderBarProps) {
           </button>
         </div>
       </div>
+
+      {/* Persistent Global Pomodoro Mini-Bar */}
+      {showMiniPomo && (
+        <div className="max-w-xl mx-auto px-4 pb-2 animate-in">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-surface border border-lineStrong">
+            <button
+              type="button"
+              onClick={onOpenPomodoro}
+              className="flex items-center gap-2 min-w-0 flex-1 text-left"
+            >
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${pomodoro.running ? 'animate-pulse' : ''}`}
+                style={{ backgroundColor: getDisciplineHex(pomodoro.discipline) }}
+              />
+              <Timer size={13} className="text-muted shrink-0" />
+              <span className="font-mono text-xs font-bold text-ink tabular-nums">
+                {mins}:{secs}
+              </span>
+              <span className="text-xs text-ink2 truncate">• {pomodoro.discipline}</span>
+            </button>
+            <button
+              type="button"
+              onClick={pomodoro.toggleRun}
+              aria-label={pomodoro.running ? 'Pausar foco' : 'Retomar foco'}
+              className="w-7 h-7 rounded-lg bg-surface2 border border-line flex items-center justify-center text-ink hover:border-accent transition-colors shrink-0"
+            >
+              {pomodoro.running ? <Pause size={12} /> : <Play size={12} />}
+            </button>
+          </div>
+        </div>
+      )}
 
       {showLoveToast && (
         <div className="max-w-xl mx-auto px-4 pb-2.5 animate-in">

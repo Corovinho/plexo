@@ -87,6 +87,7 @@ export interface PblCase {
   objectives: PblObjective[];
   notes: string;
   term: string;
+  archived?: boolean;
   updatedAt: string;
 }
 
@@ -96,4 +97,29 @@ export interface PomodoroSession {
   minutes: number;
   discipline: DisciplineKey;
   completedAt: string;
+}
+
+export interface AbsenceEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  note?: string;
+}
+
+export interface DisciplineAbsence {
+  discipline: DisciplineKey;
+  maxAllowed: number;
+  entries: AbsenceEntry[];
+}
+
+export interface ToastItem {
+  id: string;
+  message: string;
+  undoLabel?: string;
+  onUndo?: () => void;
+}
+
+export interface DraftFlashcard {
+  front: string;
+  back: string;
+  discipline?: DisciplineKey | '';
 }

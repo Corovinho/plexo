@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -9,10 +9,12 @@ import {
   ArrowLeft,
   Sparkles,
   Layers,
+  Flame,
 } from 'lucide-react';
 import { usePlexo } from '@/context/PlexoContext';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { DisciplineBadge } from '@/components/ui/DisciplineBadge';
+import { AiFlashcardModal } from '@/components/AiFlashcardModal';
 import {
   DISCIPLINE_LIST,
   addDaysLocal,
@@ -24,7 +26,10 @@ import type { DisciplineKey, FlashcardRow } from '@/types';
 
 type CardFilter = 'all' | 'due' | 'mastered';
 
-function computeNextInterval(currentInterval: number, rating: 'again' | 'hard' | 'good' | 'easy'): number {
+function computeNextInterval(
+  currentInterval: number,
+  rating: 'again' | 'hard' | 'good' | 'easy'
+): number {
   if (rating === 'again') return 0;
   if (rating === 'hard') return 1;
   if (rating === 'good') {
@@ -32,35 +37,57 @@ function computeNextInterval(currentInterval: number, rating: 'again' | 'hard' |
     if (currentInterval === 1) return 3;
     return Math.min(90, Math.round(currentInterval * 2));
   }
-  // easy
   if (currentInterval <= 0) return 4;
   if (currentInterval <= 2) return 7;
   return Math.min(120, Math.round(currentInterval * 2.5));
 }
 
 export default function AnkiTab() {
-  const { flashcards, cardTags, setCardTags } = usePlexo();
+  const {
+    flashcards,
+    cardTags,
+    setCardTags,
+    pendingCardDraft,
+    setPendingCardDraft,
+    showToast,
+  } = usePlexo();
   const todayStr = getLocalDateString();
 
-  // Review session state — uses an immutable ID queue snapshot so reviewing NEVER skips cards!
+  // Review session state — immutable ID queue snapshot + cram flag
   const [mode, setMode] = useState<'list' | 'review' | 'done'>('list');
+  const [isCramMode, setIsCramMode] = useState(false);
   const [reviewQueue, setReviewQueue] = useState<string[]>([]);
   const [reviewedCount, setReviewedCount] = useState(0);
   const [initialQueueSize, setInitialQueueSize] = useState(0);
   const [flipped, setFlipped] = useState(false);
+
+  // Touch swipe tracking for one-handed mobile review
+  const touchStartX = useRef<number | null>(null);
 
   // List filter / search
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<CardFilter>('all');
   const [tagFilter, setTagFilter] = useState<string>('Todas');
 
-  // Create / Edit modal
+  // Modals
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [front, setFront] = useState('');
   const [back, setBack] = useState('');
   const [tag, setTag] = useState<DisciplineKey | ''>('');
   const [saving, setSaving] = useState(false);
+
+  // Open pre-filled card modal when coming from Ciclo PBL objective!
+  useEffect(() => {
+    if (!pendingCardDraft) return;
+    setEditingId(null);
+    setFront(pendingCardDraft.front);
+    setBack(pendingCardDraft.back);
+    setTag(pendingCardDraft.discipline || '');
+    setSheetOpen(true);
+    setPendingCardDraft(null);
+  }, [pendingCardDraft, setPendingCardDraft]);
 
   const cardsById = useMemo(() => {
     const map = new Map<string, FlashcardRow>();
@@ -78,7 +105,6 @@ export default function AnkiTab() {
     [flashcards.data]
   );
 
-  // Detect exact duplicate cards (like the accidental double-tap in the old Bolt app!)
   const duplicateIds = useMemo(() => {
     const seen = new Set<string>();
     const dupes: string[] = [];
@@ -112,7 +138,7 @@ export default function AnkiTab() {
     });
   }, [flashcards.data, filter, tagFilter, cardTags, search, todayStr]);
 
-  const startReview = (subset?: FlashcardRow[]) => {
+  const startReview = (subset?: FlashcardRow[], cram = false) => {
     const list = subset && subset.length > 0 ? subset : dueCards;
     if (list.length === 0) return;
     const ids = list.map((c) => c.id);
@@ -120,6 +146,7 @@ export default function AnkiTab() {
     setInitialQueueSize(ids.length);
     setReviewedCount(0);
     setFlipped(false);
+    setIsCramMode(cram);
     setMode('review');
   };
 
@@ -130,21 +157,22 @@ export default function AnkiTab() {
     async (rating: 'again' | 'hard' | 'good' | 'easy') => {
       if (!currentCard) return;
 
-      const nextInterval = computeNextInterval(currentCard.interval || 0, rating);
-      const nextDate =
-        rating === 'again' ? todayStr : addDaysLocal(todayStr, nextInterval);
+      // In cram ("Véspera de Prova") mode, only update schedule if card was due or missed
+      if (!isCramMode || currentCard.next_review <= todayStr || rating === 'again') {
+        const nextInterval = computeNextInterval(currentCard.interval || 0, rating);
+        const nextDate = rating === 'again' ? todayStr : addDaysLocal(todayStr, nextInterval);
 
-      await flashcards.update(currentCard.id, {
-        next_review: nextDate,
-        interval: nextInterval,
-      });
+        await flashcards.update(currentCard.id, {
+          next_review: nextDate,
+          interval: nextInterval,
+        });
+      }
 
       setFlipped(false);
 
       setReviewQueue((prev) => {
         const [, ...rest] = prev;
         if (rating === 'again') {
-          // Re-queue card at end of current session so she practices it until she recalls!
           return [...rest, currentCard.id];
         }
         setReviewedCount((n) => n + 1);
@@ -154,10 +182,10 @@ export default function AnkiTab() {
         return rest;
       });
     },
-    [currentCard, flashcards, todayStr]
+    [currentCard, flashcards, todayStr, isCramMode]
   );
 
-  // Keyboard shortcuts during review (Space = flip, 1-4 = rate)
+  // Keyboard shortcuts during review
   useEffect(() => {
     if (mode !== 'review') return;
     const onKey = (e: KeyboardEvent) => {
@@ -180,7 +208,7 @@ export default function AnkiTab() {
     setEditingId(null);
     setFront('');
     setBack('');
-    setTag('');
+    setTag(tagFilter !== 'Todas' ? (tagFilter as DisciplineKey) : '');
     setSheetOpen(true);
   };
 
@@ -190,6 +218,23 @@ export default function AnkiTab() {
     setBack(card.back);
     setTag(cardTags[card.id] || '');
     setSheetOpen(true);
+  };
+
+  const deleteCardWithUndo = async (card: FlashcardRow) => {
+    const prevTag = cardTags[card.id];
+    await flashcards.remove(card.id);
+    showToast('Flashcard excluído', () => {
+      flashcards.insert({
+        id: card.id,
+        front: card.front,
+        back: card.back,
+        next_review: card.next_review,
+        interval: card.interval,
+      });
+      if (prevTag) {
+        setCardTags((prev) => ({ ...prev, [card.id]: prevTag }));
+      }
+    });
   };
 
   const handleSave = async () => {
@@ -229,18 +274,23 @@ export default function AnkiTab() {
     for (const id of duplicateIds) {
       await flashcards.remove(id);
     }
+    showToast('Cartões duplicados removidos!');
   };
 
-  // === REVIEW MODE ===
+  const isFilteredSubset = Boolean(search.trim() || tagFilter !== 'Todas');
+
+  // === REVIEW MODE (One-handed thumb-zone + swipe to flip!) ===
   if (mode === 'review' && currentCard) {
     const cardTag = cardTags[currentCard.id];
     const goodDays = computeNextInterval(currentCard.interval || 0, 'good');
     const easyDays = computeNextInterval(currentCard.interval || 0, 'easy');
     const progressPct =
-      initialQueueSize > 0 ? Math.min(100, Math.round((reviewedCount / initialQueueSize) * 100)) : 0;
+      initialQueueSize > 0
+        ? Math.min(100, Math.round((reviewedCount / initialQueueSize) * 100))
+        : 0;
 
     return (
-      <div className="space-y-4 animate-in">
+      <div className="space-y-4 animate-in flex flex-col min-h-[calc(100vh-11rem)]">
         <div className="flex items-center justify-between">
           <button
             type="button"
@@ -250,12 +300,18 @@ export default function AnkiTab() {
             <ArrowLeft size={15} />
             Voltar
           </button>
-          <span className="font-mono text-xs text-muted tabular-nums">
-            {reviewedCount}/{initialQueueSize} • restam {reviewQueue.length}
-          </span>
+          <div className="flex items-center gap-2">
+            {isCramMode && (
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-warm/15 text-warm">
+                Véspera
+              </span>
+            )}
+            <span className="font-mono text-xs text-muted tabular-nums">
+              {reviewedCount}/{initialQueueSize} • restam {reviewQueue.length}
+            </span>
+          </div>
         </div>
 
-        {/* Progress bar */}
         <div className="h-1.5 rounded-full bg-surface2 overflow-hidden">
           <div
             className="h-full rounded-full bg-accent transition-all duration-300"
@@ -263,16 +319,28 @@ export default function AnkiTab() {
           />
         </div>
 
-        {/* Tactile Flashcard */}
+        {/* Swipeable / Tappable Flashcard */}
         <button
           type="button"
           onClick={() => setFlipped((f) => !f)}
-          className="w-full plexo-card p-6 min-h-[260px] flex flex-col justify-between text-left transition-all hover:border-lineStrong active:scale-[0.99]"
+          onTouchStart={(e) => {
+            touchStartX.current = e.touches[0]?.clientX ?? null;
+          }}
+          onTouchEnd={(e) => {
+            if (touchStartX.current === null) return;
+            const endX = e.changedTouches[0]?.clientX ?? touchStartX.current;
+            const delta = Math.abs(endX - touchStartX.current);
+            touchStartX.current = null;
+            if (delta > 45) {
+              setFlipped((f) => !f);
+            }
+          }}
+          className="w-full flex-1 plexo-card p-6 min-h-[260px] flex flex-col justify-between text-left transition-all hover:border-lineStrong active:scale-[0.99]"
         >
           <div className="flex items-center justify-between w-full">
             <span
               className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                flipped ? 'bg-emerald-500/15 text-emerald-400' : 'bg-accentSoft text-accent'
+                flipped ? 'bg-emerald-500/15 text-emerald-500' : 'bg-accentSoft text-accent'
               }`}
             >
               {flipped ? 'Resposta' : 'Pergunta'}
@@ -288,56 +356,58 @@ export default function AnkiTab() {
 
           <div className="text-center">
             <span className="text-[11px] text-muted">
-              {flipped ? 'Avalie o quanto você lembrou abaixo' : 'Toque para revelar a resposta'}
+              {flipped ? 'Avalie abaixo com um toque' : 'Toque ou deslize para revelar'}
             </span>
           </div>
         </button>
 
-        {/* Rating Controls */}
-        {flipped ? (
-          <div className="grid grid-cols-4 gap-2 animate-in">
+        {/* Comfortable Thumb-Zone Controls */}
+        <div className="pt-1">
+          {flipped ? (
+            <div className="grid grid-cols-4 gap-2 animate-in">
+              <button
+                type="button"
+                onClick={() => rateCard('again')}
+                className="min-h-[58px] px-2 rounded-2xl border border-rose-500/35 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 active:scale-95 transition-all"
+              >
+                <span className="block text-xs font-bold">Errei</span>
+                <span className="block font-mono text-[10px] opacity-80 mt-0.5">agora</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => rateCard('hard')}
+                className="min-h-[58px] px-2 rounded-2xl border border-amber-500/35 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 active:scale-95 transition-all"
+              >
+                <span className="block text-xs font-bold">Difícil</span>
+                <span className="block font-mono text-[10px] opacity-80 mt-0.5">+1d</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => rateCard('good')}
+                className="min-h-[58px] px-2 rounded-2xl border border-sky-500/35 bg-sky-500/10 text-sky-500 hover:bg-sky-500/20 active:scale-95 transition-all"
+              >
+                <span className="block text-xs font-bold">Bom</span>
+                <span className="block font-mono text-[10px] opacity-80 mt-0.5">+{goodDays}d</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => rateCard('easy')}
+                className="min-h-[58px] px-2 rounded-2xl border border-emerald-500/35 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 active:scale-95 transition-all"
+              >
+                <span className="block text-xs font-bold">Fácil</span>
+                <span className="block font-mono text-[10px] opacity-80 mt-0.5">+{easyDays}d</span>
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={() => rateCard('again')}
-              className="py-3 px-2 rounded-xl border border-rose-500/35 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20 transition-colors"
+              onClick={() => setFlipped(true)}
+              className="plexo-btn-primary w-full min-h-[54px] text-sm rounded-2xl"
             >
-              <span className="block text-xs font-bold">Errei</span>
-              <span className="block font-mono text-[10px] opacity-80 mt-0.5">agora</span>
+              Mostrar resposta
             </button>
-            <button
-              type="button"
-              onClick={() => rateCard('hard')}
-              className="py-3 px-2 rounded-xl border border-amber-500/35 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20 transition-colors"
-            >
-              <span className="block text-xs font-bold">Difícil</span>
-              <span className="block font-mono text-[10px] opacity-80 mt-0.5">+1d</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => rateCard('good')}
-              className="py-3 px-2 rounded-xl border border-sky-500/35 bg-sky-500/10 text-sky-500 hover:bg-sky-500/20 transition-colors"
-            >
-              <span className="block text-xs font-bold">Bom</span>
-              <span className="block font-mono text-[10px] opacity-80 mt-0.5">+{goodDays}d</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => rateCard('easy')}
-              className="py-3 px-2 rounded-xl border border-emerald-500/35 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 transition-colors"
-            >
-              <span className="block text-xs font-bold">Fácil</span>
-              <span className="block font-mono text-[10px] opacity-80 mt-0.5">+{easyDays}d</span>
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setFlipped(true)}
-            className="plexo-btn-primary w-full py-3"
-          >
-            Mostrar resposta
-          </button>
-        )}
+          )}
+        </div>
       </div>
     );
   }
@@ -346,7 +416,7 @@ export default function AnkiTab() {
   if (mode === 'done') {
     return (
       <div className="plexo-card p-8 text-center space-y-4 animate-in mt-4">
-        <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center mx-auto">
+        <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 text-emerald-500 flex items-center justify-center mx-auto">
           <CheckCircle2 size={26} />
         </div>
         <div>
@@ -366,21 +436,31 @@ export default function AnkiTab() {
   return (
     <div className="space-y-4 animate-in">
       {/* Header */}
-      <div className="flex items-end justify-between gap-3 pt-1">
+      <div className="flex items-end justify-between gap-2 pt-1">
         <div>
           <p className="text-xs font-medium text-muted">
             Repetição espaçada • {flashcards.data.length} cartões
           </p>
           <h1 className="font-serif text-3xl text-ink tracking-tight leading-tight">Anki</h1>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="plexo-btn-primary !py-2 !px-3.5 text-xs shrink-0"
-        >
-          <Plus size={15} />
-          Cartão
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setAiOpen(true)}
+            className="plexo-btn-ghost !py-2 !px-3 text-xs border-accent/35 text-accent bg-accentSoft hover:border-accent"
+          >
+            <Sparkles size={14} />
+            IA / Lote
+          </button>
+          <button
+            type="button"
+            onClick={openCreate}
+            className="plexo-btn-primary !py-2 !px-3 text-xs"
+          >
+            <Plus size={15} />
+            Cartão
+          </button>
+        </div>
       </div>
 
       {/* Review CTA Hero */}
@@ -394,7 +474,7 @@ export default function AnkiTab() {
           </div>
           <p className="text-[11px] text-muted mt-0.5">
             {dueCards.length === 0
-              ? 'Tudo em dia! Você também pode fazer uma revisão livre.'
+              ? 'Tudo em dia! Use o modo Véspera para revisar antes da prova.'
               : `${masteredCount} dominado${masteredCount === 1 ? '' : 's'} • SM-2 ativo`}
           </p>
         </div>
@@ -402,7 +482,7 @@ export default function AnkiTab() {
         {dueCards.length > 0 ? (
           <button
             type="button"
-            onClick={() => startReview(dueCards)}
+            onClick={() => startReview(dueCards, false)}
             className="plexo-btn-primary !px-4 !py-2.5 text-xs shrink-0"
           >
             <RotateCcw size={14} />
@@ -411,16 +491,16 @@ export default function AnkiTab() {
         ) : flashcards.data.length > 0 ? (
           <button
             type="button"
-            onClick={() => startReview(flashcards.data)}
+            onClick={() => startReview(flashcards.data, true)}
             className="plexo-btn-ghost text-xs shrink-0"
           >
             <Layers size={14} />
-            Praticar tudo
+            Véspera (todos)
           </button>
         ) : null}
       </div>
 
-      {/* Duplicate Cleanup Helper (catches the old Bolt double-submit card!) */}
+      {/* Duplicate Cleanup Helper */}
       {duplicateIds.length > 0 && (
         <div className="rounded-2xl bg-warm/10 border border-warm/25 px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs text-ink">
@@ -494,6 +574,18 @@ export default function AnkiTab() {
             ))}
           </div>
         )}
+
+        {/* Pre-Exam Cram Action for active filter/discipline */}
+        {isFilteredSubset && filteredCards.length > 0 && (
+          <button
+            type="button"
+            onClick={() => startReview(filteredCards, true)}
+            className="w-full py-2.5 px-3.5 rounded-xl bg-warm/12 border border-warm/30 text-xs font-semibold text-warm flex items-center justify-center gap-2 hover:bg-warm/20 transition-colors"
+          >
+            <Flame size={14} />
+            Modo Véspera: revisar estes {filteredCards.length} cartões agora
+          </button>
+        )}
       </div>
 
       {/* Card List */}
@@ -501,7 +593,7 @@ export default function AnkiTab() {
         {filteredCards.length === 0 ? (
           <p className="text-xs text-muted text-center py-6">
             {flashcards.data.length === 0
-              ? 'Crie seu primeiro flashcard para começar a revisar.'
+              ? 'Crie seu primeiro flashcard ou use "IA / Lote" para gerar vários de uma vez.'
               : 'Nenhum cartão encontrado com esse filtro.'}
           </p>
         ) : (
@@ -518,9 +610,7 @@ export default function AnkiTab() {
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       <span
                         className={`text-[10px] font-semibold px-1.5 py-0.5 rounded font-mono tabular-nums ${
-                          isDue
-                            ? 'bg-warm/15 text-warm'
-                            : 'bg-surface2 text-muted'
+                          isDue ? 'bg-warm/15 text-warm' : 'bg-surface2 text-muted'
                         }`}
                       >
                         {isDue ? 'Revisar hoje' : `Próx: ${formatDateBR(card.next_review)}`}
@@ -542,7 +632,7 @@ export default function AnkiTab() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => flashcards.remove(card.id)}
+                      onClick={() => deleteCardWithUndo(card)}
                       aria-label="Excluir cartão"
                       className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors"
                     >
@@ -556,7 +646,7 @@ export default function AnkiTab() {
         )}
       </div>
 
-      {/* Add / Edit Flashcard Modal */}
+      {/* Add / Edit Single Flashcard Modal */}
       <BottomSheet
         open={sheetOpen}
         onClose={() => setSheetOpen(false)}
@@ -637,6 +727,9 @@ export default function AnkiTab() {
           </button>
         </div>
       </BottomSheet>
+
+      {/* Free AI + Batch Import Modal */}
+      <AiFlashcardModal open={aiOpen} onClose={() => setAiOpen(false)} />
     </div>
   );
 }

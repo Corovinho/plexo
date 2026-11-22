@@ -1,5 +1,14 @@
 import { useMemo, useState } from 'react';
-import { Plus, Trash2, Pencil, Clock, CalendarDays, LayoutGrid } from 'lucide-react';
+import {
+  Plus,
+  Minus,
+  Trash2,
+  Pencil,
+  Clock,
+  CalendarDays,
+  LayoutGrid,
+  ShieldAlert,
+} from 'lucide-react';
 import { usePlexo } from '@/context/PlexoContext';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { DisciplineBadge } from '@/components/ui/DisciplineBadge';
@@ -8,22 +17,24 @@ import {
   DAYS_FULL_MON_FIRST,
   DAYS_SHORT,
   DISCIPLINE_LIST,
+  formatDateBR,
   formatDuration,
   getDisciplineHex,
   getDisciplineMeta,
+  getLocalDateString,
   getTodayMonIndex,
   timeToMinutes,
 } from '@/data/facapeDefaults';
-import type { ScheduleEventRow } from '@/types';
+import type { DisciplineKey, ScheduleEventRow } from '@/types';
 
 export default function RotinaTab() {
-  const { schedule } = usePlexo();
+  const { schedule, absences, setAbsences, showToast } = usePlexo();
   const todayIdx = getTodayMonIndex();
 
   const [selectedDay, setSelectedDay] = useState<number>(todayIdx);
-  const [viewMode, setViewMode] = useState<'day' | 'week'>('day');
+  const [viewMode, setViewMode] = useState<'day' | 'week' | 'absences'>('day');
 
-  // Add / Edit modal state
+  // Add / Edit class modal state
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formDay, setFormDay] = useState<number>(todayIdx);
@@ -35,8 +46,20 @@ export default function RotinaTab() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Faltômetro limit edit state
+  const [editingLimitDisc, setEditingLimitDisc] = useState<DisciplineKey | null>(null);
+  const [limitDraft, setLimitDraft] = useState('4');
+
   const eventsByDay = useMemo(() => {
-    const map: Record<number, ScheduleEventRow[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+    const map: Record<number, ScheduleEventRow[]> = {
+      0: [],
+      1: [],
+      2: [],
+      3: [],
+      4: [],
+      5: [],
+      6: [],
+    };
     for (const ev of schedule.data) {
       if (map[ev.day]) map[ev.day].push(ev);
     }
@@ -82,6 +105,21 @@ export default function RotinaTab() {
     setSheetOpen(true);
   };
 
+  const deleteEventWithUndo = async (ev: ScheduleEventRow) => {
+    await schedule.remove(ev.id);
+    showToast(`"${ev.title}" removida da grade`, () => {
+      schedule.insert({
+        id: ev.id,
+        day: ev.day,
+        start_time: ev.start_time,
+        end_time: ev.end_time,
+        category: ev.category,
+        title: ev.title,
+        custom_color: ev.custom_color,
+      });
+    });
+  };
+
   const handleSave = async () => {
     if (!startTime || !endTime) {
       setFormError('Informe o horário de início e término.');
@@ -115,6 +153,36 @@ export default function RotinaTab() {
     setSheetOpen(false);
   };
 
+  // Faltômetro actions
+  const addAbsence = (discipline: DisciplineKey) => {
+    const todayStr = getLocalDateString();
+    setAbsences((prev) =>
+      prev.map((a) =>
+        a.discipline === discipline
+          ? { ...a, entries: [...a.entries, { id: crypto.randomUUID(), date: todayStr }] }
+          : a
+      )
+    );
+  };
+
+  const removeLastAbsence = (discipline: DisciplineKey) => {
+    setAbsences((prev) =>
+      prev.map((a) =>
+        a.discipline === discipline && a.entries.length > 0
+          ? { ...a, entries: a.entries.slice(0, -1) }
+          : a
+      )
+    );
+  };
+
+  const saveLimit = (discipline: DisciplineKey) => {
+    const num = Math.max(1, Math.min(30, parseInt(limitDraft, 10) || 4));
+    setAbsences((prev) =>
+      prev.map((a) => (a.discipline === discipline ? { ...a, maxAllowed: num } : a))
+    );
+    setEditingLimitDisc(null);
+  };
+
   const now = new Date();
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -131,47 +199,55 @@ export default function RotinaTab() {
           </h1>
         </div>
 
-        <button
-          type="button"
-          onClick={() => openCreate(selectedDay)}
-          className="plexo-btn-primary !py-2 !px-3.5 text-xs shrink-0"
-        >
-          <Plus size={15} />
-          Aula
-        </button>
+        {viewMode !== 'absences' && (
+          <button
+            type="button"
+            onClick={() => openCreate(selectedDay)}
+            className="plexo-btn-primary !py-2 !px-3.5 text-xs shrink-0"
+          >
+            <Plus size={15} />
+            Aula
+          </button>
+        )}
       </div>
 
-      {/* View Switcher */}
-      <div className="grid grid-cols-2 p-1 rounded-xl bg-surface border border-line">
+      {/* 3-Way View Switcher */}
+      <div className="grid grid-cols-3 p-1 rounded-xl bg-surface border border-line">
         <button
           type="button"
           onClick={() => setViewMode('day')}
           className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${
-            viewMode === 'day'
-              ? 'bg-surface2 text-ink shadow-sm'
-              : 'text-ink2 hover:text-ink'
+            viewMode === 'day' ? 'bg-surface2 text-ink shadow-sm' : 'text-ink2 hover:text-ink'
           }`}
         >
-          <CalendarDays size={14} />
+          <CalendarDays size={13} className={viewMode === 'day' ? 'text-accent' : ''} />
           Por Dia
         </button>
         <button
           type="button"
           onClick={() => setViewMode('week')}
           className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${
-            viewMode === 'week'
-              ? 'bg-surface2 text-ink shadow-sm'
-              : 'text-ink2 hover:text-ink'
+            viewMode === 'week' ? 'bg-surface2 text-ink shadow-sm' : 'text-ink2 hover:text-ink'
           }`}
         >
-          <LayoutGrid size={14} />
-          Semana Completa
+          <LayoutGrid size={13} className={viewMode === 'week' ? 'text-accent' : ''} />
+          Semana
+        </button>
+        <button
+          type="button"
+          onClick={() => setViewMode('absences')}
+          className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+            viewMode === 'absences' ? 'bg-surface2 text-ink shadow-sm' : 'text-ink2 hover:text-ink'
+          }`}
+        >
+          <ShieldAlert size={13} className={viewMode === 'absences' ? 'text-accent' : ''} />
+          Faltas
         </button>
       </div>
 
-      {viewMode === 'day' ? (
+      {/* === VIEW 1: POR DIA === */}
+      {viewMode === 'day' && (
         <>
-          {/* Day Selector Pills */}
           <div className="grid grid-cols-7 gap-1.5">
             {DAYS_SHORT.map((day, i) => {
               const count = eventsByDay[i]?.length || 0;
@@ -211,7 +287,6 @@ export default function RotinaTab() {
             })}
           </div>
 
-          {/* Selected Day Schedule */}
           <div className="plexo-card p-4">
             <div className="flex items-center justify-between mb-3.5">
               <div>
@@ -291,9 +366,7 @@ export default function RotinaTab() {
                             <span className="font-mono tabular-nums font-medium">
                               {ev.start_time} — {ev.end_time}
                             </span>
-                            {duration && (
-                              <span className="text-[11px] text-muted">({duration})</span>
-                            )}
+                            {duration && <span className="text-[11px] text-muted">({duration})</span>}
                           </div>
                         </div>
 
@@ -308,7 +381,7 @@ export default function RotinaTab() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => schedule.remove(ev.id)}
+                            onClick={() => deleteEventWithUndo(ev)}
                             aria-label="Excluir aula"
                             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors"
                           >
@@ -323,8 +396,10 @@ export default function RotinaTab() {
             )}
           </div>
         </>
-      ) : (
-        /* Full Week Compact Overview */
+      )}
+
+      {/* === VIEW 2: SEMANA COMPLETA === */}
+      {viewMode === 'week' && (
         <div className="space-y-2.5">
           {DAYS_FULL_MON_FIRST.map((dayName, dayIdx) => {
             const list = eventsByDay[dayIdx] || [];
@@ -394,6 +469,136 @@ export default function RotinaTab() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* === VIEW 3: FALTÔMETRO POR DISCIPLINA === */}
+      {viewMode === 'absences' && (
+        <div className="space-y-3">
+          <div className="plexo-card p-3.5 flex items-start gap-2.5">
+            <ShieldAlert size={16} className="text-accent shrink-0 mt-0.5" />
+            <p className="text-xs text-ink2 leading-relaxed">
+              Controle suas faltas em cada módulo da FACAPE (limite padrão de 25%). Toque no limite para ajustar conforme a carga horária da disciplina.
+            </p>
+          </div>
+
+          <div className="space-y-2.5">
+            {absences.map((item) => {
+              const count = item.entries.length;
+              const ratio = item.maxAllowed > 0 ? count / item.maxAllowed : 0;
+              const pct = Math.min(100, Math.round(ratio * 100));
+              const remaining = Math.max(0, item.maxAllowed - count);
+              const meta = getDisciplineMeta(item.discipline);
+
+              const barColor =
+                ratio >= 0.85 ? '#f43f5e' : ratio >= 0.6 ? '#f59e0b' : meta.hex;
+              const statusText =
+                count >= item.maxAllowed
+                  ? 'Limite atingido!'
+                  : remaining === 1
+                  ? 'Resta apenas 1 falta'
+                  : `Pode faltar mais ${remaining}x`;
+
+              return (
+                <div key={item.discipline} className="plexo-card p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <DisciplineBadge category={item.discipline} size="sm" />
+                        {editingLimitDisc === item.discipline ? (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              saveLimit(item.discipline);
+                            }}
+                            className="inline-flex items-center gap-1"
+                          >
+                            <span className="text-[11px] text-muted">Máx:</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={30}
+                              autoFocus
+                              value={limitDraft}
+                              onChange={(e) => setLimitDraft(e.target.value)}
+                              onBlur={() => saveLimit(item.discipline)}
+                              className="plexo-input !py-0.5 !px-1.5 w-12 text-xs font-mono"
+                            />
+                          </form>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingLimitDisc(item.discipline);
+                              setLimitDraft(String(item.maxAllowed));
+                            }}
+                            className="text-[11px] text-muted hover:text-ink underline decoration-dotted"
+                          >
+                            Limite: {item.maxAllowed}
+                          </button>
+                        )}
+                      </div>
+                      <p
+                        className={`text-xs font-medium mt-1 ${
+                          count >= item.maxAllowed
+                            ? 'text-danger'
+                            : remaining === 1
+                            ? 'text-warm'
+                            : 'text-ink2'
+                        }`}
+                      >
+                        {statusText}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={count === 0}
+                        onClick={() => removeLastAbsence(item.discipline)}
+                        aria-label={`Remover falta em ${item.discipline}`}
+                        className="w-8 h-8 rounded-xl bg-surface2 border border-line flex items-center justify-center text-ink disabled:opacity-35 hover:border-lineStrong transition-colors"
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <span className="font-mono text-base font-bold text-ink tabular-nums w-8 text-center">
+                        {count}/{item.maxAllowed}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => addAbsence(item.discipline)}
+                        aria-label={`Registrar falta em ${item.discipline}`}
+                        className="w-8 h-8 rounded-xl bg-surface2 border border-line flex items-center justify-center text-ink hover:border-accent hover:text-accent transition-colors"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="h-1.5 rounded-full bg-surface2 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{ width: `${pct}%`, backgroundColor: barColor }}
+                    />
+                  </div>
+
+                  {item.entries.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {item.entries.map((entry) => (
+                        <span
+                          key={entry.id}
+                          className="font-mono text-[10px] px-2 py-0.5 rounded-md bg-surface2 text-muted border border-line tabular-nums"
+                        >
+                          {formatDateBR(entry.date)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -482,7 +687,9 @@ export default function RotinaTab() {
                     onClick={() => setCustomColor(c.value)}
                     title={c.label}
                     className={`w-7 h-7 rounded-full transition-transform ${
-                      customColor === c.value ? 'scale-110 ring-2 ring-accent ring-offset-2 ring-offset-surface' : ''
+                      customColor === c.value
+                        ? 'scale-110 ring-2 ring-accent ring-offset-2 ring-offset-surface'
+                        : ''
                     }`}
                     style={{ backgroundColor: c.value }}
                   />
@@ -511,7 +718,8 @@ export default function RotinaTab() {
               <button
                 type="button"
                 onClick={async () => {
-                  await schedule.remove(editingId);
+                  const target = schedule.data.find((e) => e.id === editingId);
+                  if (target) await deleteEventWithUndo(target);
                   setSheetOpen(false);
                 }}
                 className="plexo-btn-ghost text-danger border-danger/30 hover:bg-danger/10"

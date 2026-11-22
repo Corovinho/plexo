@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Plus,
   Trash2,
+  Pencil,
   Check,
+  X,
   BookOpenCheck,
   Target,
   Timer,
@@ -12,6 +14,8 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  Brain,
+  Archive,
 } from 'lucide-react';
 import { usePlexo } from '@/context/PlexoContext';
 import { BottomSheet } from '@/components/ui/BottomSheet';
@@ -19,58 +23,50 @@ import { DisciplineBadge } from '@/components/ui/DisciplineBadge';
 import {
   DISCIPLINE_LIST,
   PBL_STAGES,
+  POMODORO_PRESETS,
   getDisciplineHex,
   getLocalDateString,
 } from '@/data/facapeDefaults';
-import type { DisciplineKey, GoalCategory, PblCase, PblStage } from '@/types';
+import type { DisciplineKey, DraftFlashcard, GoalCategory, GoalRow, PblCase, PblStage } from '@/types';
 
 type EstudosSubview = 'pbl' | 'metas' | 'foco';
 
 interface EstudosTabProps {
   initialSubview?: string;
+  onSubviewChange?: (sub: EstudosSubview) => void;
+  onSendToAnki: (draft: DraftFlashcard) => void;
 }
 
-const POMODORO_PRESETS = [
-  { label: '25 min', minutes: 25, kind: 'focus' as const },
-  { label: '50 min', minutes: 50, kind: 'focus' as const },
-  { label: '15 min', minutes: 15, kind: 'focus' as const },
-  { label: 'Pausa 5m', minutes: 5, kind: 'break' as const },
-];
+export default function EstudosTab({
+  initialSubview,
+  onSubviewChange,
+  onSendToAnki,
+}: EstudosTabProps) {
+  const {
+    goals,
+    pblCases,
+    setPblCases,
+    pomodoro,
+    pomodoroLog,
+    currentTerm,
+    showToast,
+  } = usePlexo();
 
-function playGentleChime() {
-  try {
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(528, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(792, ctx.currentTime + 0.25);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.7);
-  } catch {
-    // Audio blocked or unsupported
-  }
-}
-
-export default function EstudosTab({ initialSubview }: EstudosTabProps) {
-  const { goals, pblCases, setPblCases, pomodoroLog, setPomodoroLog, currentTerm } = usePlexo();
-
-  const [subview, setSubview] = useState<EstudosSubview>(() => {
+  const [subview, setSubviewState] = useState<EstudosSubview>(() => {
     if (initialSubview === 'metas' || initialSubview === 'foco' || initialSubview === 'pbl') {
       return initialSubview;
     }
     return 'pbl';
   });
 
+  const setSubview = (next: EstudosSubview) => {
+    setSubviewState(next);
+    onSubviewChange?.(next);
+  };
+
   useEffect(() => {
     if (initialSubview === 'metas' || initialSubview === 'foco' || initialSubview === 'pbl') {
-      setSubview(initialSubview);
+      setSubviewState(initialSubview);
     }
   }, [initialSubview]);
 
@@ -78,7 +74,10 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
   const [pblSheetOpen, setPblSheetOpen] = useState(false);
   const [pblTitle, setPblTitle] = useState('');
   const [pblDiscipline, setPblDiscipline] = useState<DisciplineKey>('Tutoria');
-  const [expandedCaseId, setExpandedCaseId] = useState<string | null>(pblCases[0]?.id || null);
+  const [showArchivedPbl, setShowArchivedPbl] = useState(false);
+  const [expandedCaseId, setExpandedCaseId] = useState<string | null>(
+    pblCases.find((c) => !c.archived)?.id || null
+  );
   const [newObjectiveByCase, setNewObjectiveByCase] = useState<Record<string, string>>({});
 
   // --- Metas State ---
@@ -93,54 +92,18 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
     weekly: true,
     tasks: true,
   });
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [editingGoalText, setEditingGoalText] = useState('');
 
-  // --- Pomodoro State ---
-  const [presetIdx, setPresetIdx] = useState(0);
-  const [focusDiscipline, setFocusDiscipline] = useState<DisciplineKey>('Tutoria');
-  const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS[0].minutes * 60);
-  const [running, setRunning] = useState(false);
-  const completedGuardRef = useRef(false);
+  const visiblePblCases = useMemo(
+    () => pblCases.filter((c) => (showArchivedPbl ? true : !c.archived)),
+    [pblCases, showArchivedPbl]
+  );
 
-  const activePreset = POMODORO_PRESETS[presetIdx];
-  const totalPresetSeconds = activePreset.minutes * 60;
-
-  useEffect(() => {
-    if (!running) return;
-    completedGuardRef.current = false;
-    const id = window.setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          window.clearInterval(id);
-          setRunning(false);
-          if (!completedGuardRef.current) {
-            completedGuardRef.current = true;
-            playGentleChime();
-            if (activePreset.kind === 'focus') {
-              setPomodoroLog((log) => [
-                ...log,
-                {
-                  id: crypto.randomUUID(),
-                  date: getLocalDateString(),
-                  minutes: activePreset.minutes,
-                  discipline: focusDiscipline,
-                  completedAt: new Date().toISOString(),
-                },
-              ]);
-            }
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [running, activePreset, focusDiscipline, setPomodoroLog]);
-
-  const selectPreset = (idx: number) => {
-    setRunning(false);
-    setPresetIdx(idx);
-    setSecondsLeft(POMODORO_PRESETS[idx].minutes * 60);
-  };
+  const archivedCount = useMemo(
+    () => pblCases.filter((c) => c.archived).length,
+    [pblCases]
+  );
 
   const todayStr = getLocalDateString();
   const todayMinutes = useMemo(
@@ -158,6 +121,7 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
       objectives: [],
       notes: '',
       term: currentTerm,
+      archived: false,
       updatedAt: getLocalDateString(),
     };
     setPblCases((prev) => [item, ...prev]);
@@ -170,6 +134,13 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
     setPblCases((prev) =>
       prev.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: getLocalDateString() } : c))
     );
+  };
+
+  const removePblCase = (item: PblCase) => {
+    setPblCases((prev) => prev.filter((c) => c.id !== item.id));
+    showToast(`"${item.title}" removido`, () => {
+      setPblCases((prev) => [item, ...prev]);
+    });
   };
 
   const addObjective = (caseId: string) => {
@@ -201,9 +172,32 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
     });
   };
 
-  const minutesDisplay = String(Math.floor(secondsLeft / 60)).padStart(2, '0');
-  const secondsDisplay = String(secondsLeft % 60).padStart(2, '0');
-  const progressRatio = totalPresetSeconds > 0 ? 1 - secondsLeft / totalPresetSeconds : 0;
+  const deleteGoalWithUndo = async (goal: GoalRow) => {
+    await goals.remove(goal.id);
+    showToast('Meta excluída', () => {
+      goals.insert({
+        id: goal.id,
+        text: goal.text,
+        completed: goal.completed,
+        category: goal.category,
+      });
+    });
+  };
+
+  const saveEditGoal = async () => {
+    if (!editingGoalId || !editingGoalText.trim()) {
+      setEditingGoalId(null);
+      return;
+    }
+    await goals.update(editingGoalId, { text: editingGoalText.trim() });
+    setEditingGoalId(null);
+  };
+
+  const activePreset = POMODORO_PRESETS[pomodoro.presetIdx] || POMODORO_PRESETS[0];
+  const minutesDisplay = String(Math.floor(pomodoro.secondsLeft / 60)).padStart(2, '0');
+  const secondsDisplay = String(pomodoro.secondsLeft % 60).padStart(2, '0');
+  const progressRatio =
+    pomodoro.totalSeconds > 0 ? 1 - pomodoro.secondsLeft / pomodoro.totalSeconds : 0;
   const ringRadius = 82;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringOffset = ringCircumference * (1 - progressRatio);
@@ -213,12 +207,8 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
       {/* Header */}
       <div className="flex items-end justify-between gap-3 pt-1">
         <div>
-          <p className="text-xs font-medium text-muted">
-            Ciclo PBL, metas e foco médico
-          </p>
-          <h1 className="font-serif text-3xl text-ink tracking-tight leading-tight">
-            Estudos
-          </h1>
+          <p className="text-xs font-medium text-muted">Ciclo PBL, metas e foco médico</p>
+          <h1 className="font-serif text-3xl text-ink tracking-tight leading-tight">Estudos</h1>
         </div>
         {subview === 'pbl' && (
           <button
@@ -262,9 +252,24 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
       {/* === SUBVIEW 1: CICLO PBL === */}
       {subview === 'pbl' && (
         <div className="space-y-3">
-          {pblCases.length === 0 ? (
+          {archivedCount > 0 && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowArchivedPbl((v) => !v)}
+                className="text-xs font-medium text-ink2 hover:text-ink inline-flex items-center gap-1.5"
+              >
+                <Archive size={13} />
+                {showArchivedPbl
+                  ? 'Ocultar períodos anteriores'
+                  : `Ver ${archivedCount} arquivado${archivedCount > 1 ? 's' : ''}`}
+              </button>
+            </div>
+          )}
+
+          {visiblePblCases.length === 0 ? (
             <div className="plexo-card p-8 text-center">
-              <p className="text-sm font-medium text-ink">Nenhum problema PBL cadastrado</p>
+              <p className="text-sm font-medium text-ink">Nenhum problema PBL ativo</p>
               <p className="text-xs text-muted mt-1">
                 Acompanhe cada Tutoria, TBL ou MISCO da abertura ao fechamento.
               </p>
@@ -278,13 +283,16 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
               </button>
             </div>
           ) : (
-            pblCases.map((item) => {
+            visiblePblCases.map((item) => {
               const isExpanded = expandedCaseId === item.id;
               const hex = getDisciplineHex(item.discipline);
               const doneObj = item.objectives.filter((o) => o.done).length;
 
               return (
-                <div key={item.id} className="plexo-card overflow-hidden">
+                <div
+                  key={item.id}
+                  className={`plexo-card overflow-hidden ${item.archived ? 'opacity-70' : ''}`}
+                >
                   <button
                     type="button"
                     onClick={() => setExpandedCaseId(isExpanded ? null : item.id)}
@@ -296,6 +304,11 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                         <span className="text-[11px] font-medium text-muted">
                           Etapa: <strong className="text-ink">{PBL_STAGES[item.stage].label}</strong>
                         </span>
+                        {item.archived && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface2 text-muted">
+                            {item.term}
+                          </span>
+                        )}
                       </div>
                       <h3 className="text-sm font-bold text-ink mt-1.5">{item.title}</h3>
                       {item.objectives.length > 0 && (
@@ -383,7 +396,7 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                           {item.objectives.map((obj) => (
                             <div
                               key={obj.id}
-                              className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl bg-surface border border-line"
+                              className="flex items-center gap-2 px-2.5 py-2 rounded-xl bg-surface border border-line"
                             >
                               <button
                                 type="button"
@@ -409,6 +422,21 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                               >
                                 {obj.text}
                               </span>
+                              {/* 1-tap shortcut: send learning objective directly to Anki! */}
+                              <button
+                                type="button"
+                                title="Transformar objetivo em flashcard no Anki"
+                                onClick={() =>
+                                  onSendToAnki({
+                                    front: `${item.title}: ${obj.text}`,
+                                    back: '',
+                                    discipline: item.discipline,
+                                  })
+                                }
+                                className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-accent hover:bg-accentSoft transition-colors shrink-0"
+                              >
+                                <Brain size={13} />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() =>
@@ -416,7 +444,7 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                                     objectives: item.objectives.filter((o) => o.id !== obj.id),
                                   })
                                 }
-                                className="text-muted hover:text-danger p-1"
+                                className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-danger transition-colors shrink-0"
                               >
                                 <Trash2 size={12} />
                               </button>
@@ -441,9 +469,7 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                       <div className="flex justify-end">
                         <button
                           type="button"
-                          onClick={() =>
-                            setPblCases((prev) => prev.filter((c) => c.id !== item.id))
-                          }
+                          onClick={() => removePblCase(item)}
                           className="text-xs text-muted hover:text-danger inline-flex items-center gap-1 py-1"
                         >
                           <Trash2 size={12} />
@@ -459,13 +485,11 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
         </div>
       )}
 
-      {/* === SUBVIEW 2: METAS & TAREFAS (Supabase-synced) === */}
+      {/* === SUBVIEW 2: METAS & TAREFAS (Supabase-synced + Inline Edit + Undo) === */}
       {subview === 'metas' && (
         <div className="space-y-3">
           <div className="flex items-center justify-between px-1">
-            <span className="text-xs text-muted">
-              Sincronizado com suas metas salvas
-            </span>
+            <span className="text-xs text-muted">Sincronizado com suas metas salvas</span>
             <button
               type="button"
               onClick={() => setHideCompletedGoals((v) => !v)}
@@ -489,7 +513,8 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
               ? allItems.filter((g) => !g.completed)
               : [...allItems].sort((a, b) => Number(a.completed) - Number(b.completed));
             const isOpen = openGoalSections[category];
-            const pct = allItems.length > 0 ? Math.round((completedCount / allItems.length) * 100) : 0;
+            const pct =
+              allItems.length > 0 ? Math.round((completedCount / allItems.length) * 100) : 0;
 
             return (
               <div key={category} className="plexo-card overflow-hidden">
@@ -558,7 +583,7 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                     ) : (
                       <div className="divide-y divide-line">
                         {visibleItems.map((goal) => (
-                          <div key={goal.id} className="flex items-center gap-3 py-2">
+                          <div key={goal.id} className="flex items-center gap-2.5 py-2">
                             <button
                               type="button"
                               onClick={() => goals.update(goal.id, { completed: !goal.completed })}
@@ -570,22 +595,70 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                             >
                               {goal.completed && <Check size={12} strokeWidth={3} />}
                             </button>
-                            <span
-                              onClick={() => goals.update(goal.id, { completed: !goal.completed })}
-                              className={`text-sm flex-1 cursor-pointer select-none ${
-                                goal.completed ? 'line-through text-muted' : 'text-ink'
-                              }`}
-                            >
-                              {goal.text}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => goals.remove(goal.id)}
-                              aria-label="Excluir meta"
-                              className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+
+                            {editingGoalId === goal.id ? (
+                              <form
+                                onSubmit={(e) => {
+                                  e.preventDefault();
+                                  saveEditGoal();
+                                }}
+                                className="flex items-center gap-1.5 flex-1 min-w-0"
+                              >
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={editingGoalText}
+                                  onChange={(e) => setEditingGoalText(e.target.value)}
+                                  onKeyDown={(e) => e.key === 'Escape' && setEditingGoalId(null)}
+                                  className="plexo-input flex-1 !py-1 !px-2 text-sm min-w-0"
+                                />
+                                <button
+                                  type="submit"
+                                  className="w-7 h-7 rounded-lg bg-accent text-accentFg flex items-center justify-center shrink-0"
+                                >
+                                  <Check size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingGoalId(null)}
+                                  className="w-7 h-7 rounded-lg bg-surface2 text-muted flex items-center justify-center shrink-0"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </form>
+                            ) : (
+                              <>
+                                <span
+                                  onClick={() =>
+                                    goals.update(goal.id, { completed: !goal.completed })
+                                  }
+                                  className={`text-sm flex-1 cursor-pointer select-none ${
+                                    goal.completed ? 'line-through text-muted' : 'text-ink'
+                                  }`}
+                                >
+                                  {goal.text}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingGoalId(goal.id);
+                                    setEditingGoalText(goal.text);
+                                  }}
+                                  aria-label="Editar meta"
+                                  className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-surface2 transition-colors shrink-0"
+                                >
+                                  <Pencil size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteGoalWithUndo(goal)}
+                                  aria-label="Excluir meta"
+                                  className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -598,19 +671,18 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
         </div>
       )}
 
-      {/* === SUBVIEW 3: FOCO (POMODORO MÉDICO) === */}
+      {/* === SUBVIEW 3: FOCO (GLOBAL PERSISTENT POMODORO) === */}
       {subview === 'foco' && (
         <div className="space-y-4">
           <div className="plexo-card p-5 flex flex-col items-center">
-            {/* Presets */}
             <div className="flex flex-wrap justify-center gap-1.5 mb-5">
               {POMODORO_PRESETS.map((p, idx) => (
                 <button
                   key={p.label}
                   type="button"
-                  onClick={() => selectPreset(idx)}
+                  onClick={() => pomodoro.selectPreset(idx)}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                    presetIdx === idx
+                    pomodoro.presetIdx === idx
                       ? 'bg-accentSoft border-accent text-accent'
                       : 'bg-surface2 border-line text-ink2 hover:text-ink'
                   }`}
@@ -620,7 +692,6 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
               ))}
             </div>
 
-            {/* Circular Timer Ring */}
             <div className="relative w-48 h-48 flex items-center justify-center">
               <svg className="w-full h-full -rotate-90" viewBox="0 0 192 192">
                 <circle
@@ -636,7 +707,11 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                   cy="96"
                   r={ringRadius}
                   fill="none"
-                  stroke={activePreset.kind === 'focus' ? getDisciplineHex(focusDiscipline) : '#10b981'}
+                  stroke={
+                    activePreset.kind === 'focus'
+                      ? getDisciplineHex(pomodoro.discipline)
+                      : '#10b981'
+                  }
                   strokeWidth="8"
                   strokeLinecap="round"
                   strokeDasharray={ringCircumference}
@@ -649,19 +724,15 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                   {minutesDisplay}:{secondsDisplay}
                 </span>
                 <span className="text-[11px] font-medium text-muted mt-1">
-                  {activePreset.kind === 'focus' ? focusDiscipline : 'Descanso'}
+                  {activePreset.kind === 'focus' ? pomodoro.discipline : 'Descanso'}
                 </span>
               </div>
             </div>
 
-            {/* Controls */}
             <div className="flex items-center gap-3 mt-5">
               <button
                 type="button"
-                onClick={() => {
-                  setRunning(false);
-                  setSecondsLeft(totalPresetSeconds);
-                }}
+                onClick={pomodoro.reset}
                 aria-label="Reiniciar timer"
                 className="plexo-btn-ghost !p-3"
               >
@@ -669,19 +740,23 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (secondsLeft === 0) setSecondsLeft(totalPresetSeconds);
-                  setRunning((r) => !r);
-                }}
+                onClick={pomodoro.toggleRun}
                 className="plexo-btn-primary !px-7 !py-3 text-sm"
               >
-                {running ? <Pause size={16} /> : <Play size={16} />}
-                {running ? 'Pausar' : secondsLeft < totalPresetSeconds && secondsLeft > 0 ? 'Continuar' : 'Iniciar foco'}
+                {pomodoro.running ? <Pause size={16} /> : <Play size={16} />}
+                {pomodoro.running
+                  ? 'Pausar'
+                  : pomodoro.secondsLeft < pomodoro.totalSeconds && pomodoro.secondsLeft > 0
+                  ? 'Continuar'
+                  : 'Iniciar foco'}
               </button>
             </div>
 
-            {/* Discipline Selector */}
-            <div className="w-full mt-6 pt-4 border-t border-line">
+            <p className="text-[11px] text-muted text-center mt-3">
+              Continua rodando mesmo se você for para o Anki ou bloquear o celular.
+            </p>
+
+            <div className="w-full mt-5 pt-4 border-t border-line">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-muted text-center mb-2.5">
                 Matéria do bloco
               </p>
@@ -690,9 +765,9 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
                   <button
                     key={d}
                     type="button"
-                    onClick={() => setFocusDiscipline(d)}
+                    onClick={() => pomodoro.setDiscipline(d)}
                     className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
-                      focusDiscipline === d
+                      pomodoro.discipline === d
                         ? 'border-accent bg-accentSoft text-ink'
                         : 'border-line bg-surface2 text-ink2'
                     }`}
@@ -704,7 +779,6 @@ export default function EstudosTab({ initialSubview }: EstudosTabProps) {
             </div>
           </div>
 
-          {/* Today's Focus Summary */}
           <div className="plexo-card p-4 flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-muted">Foco acumulado hoje</p>

@@ -5,7 +5,9 @@ import {
   AlertCircle,
   Plus,
   Trash2,
+  Pencil,
   Check,
+  X,
   ArrowRight,
   Brain,
   Timer,
@@ -26,23 +28,40 @@ import {
   getTodayMonIndex,
   timeToMinutes,
 } from '@/data/facapeDefaults';
-import type { TabId } from '@/types';
+import type { GoalRow, TabId, UrgentTaskRow } from '@/types';
 
 interface HojeTabProps {
   onNavigate: (tab: TabId, subview?: string) => void;
 }
 
 export default function HojeTab({ onNavigate }: HojeTabProps) {
-  const { schedule, goals, urgentTasks, flashcards, exams, pomodoroLog } = usePlexo();
+  const {
+    schedule,
+    goals,
+    urgentTasks,
+    flashcards,
+    exams,
+    pomodoroLog,
+    studentName,
+    compactMode,
+    showToast,
+  } = usePlexo();
+
   const [newGoal, setNewGoal] = useState('');
   const [newUrgent, setNewUrgent] = useState('');
   const [savingGoal, setSavingGoal] = useState(false);
   const [savingUrgent, setSavingUrgent] = useState(false);
 
+  // Inline edit state
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [editingGoalText, setEditingGoalText] = useState('');
+  const [editingUrgentId, setEditingUrgentId] = useState<string | null>(null);
+  const [editingUrgentText, setEditingUrgentText] = useState('');
+
   const now = new Date();
   const hour = now.getHours();
-  const greeting =
-    hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const displayName = studentName.trim() || 'doutora';
   const dateLabel = `${DAYS_FULL_SUN_FIRST[now.getDay()]}, ${now.getDate()} de ${MONTH_NAMES[now.getMonth()]}`;
 
   const todayStr = getLocalDateString(now);
@@ -57,30 +76,17 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
     [schedule.data, todayIdx]
   );
 
-  // Determine current or next class across the week
   const liveOrNextClass = useMemo(() => {
     const ongoing = todayEvents.find(
       (e) => timeToMinutes(e.start_time) <= nowMinutes && nowMinutes < timeToMinutes(e.end_time)
     );
     if (ongoing) {
-      const total = Math.max(1, timeToMinutes(ongoing.end_time) - timeToMinutes(ongoing.start_time));
-      const elapsed = nowMinutes - timeToMinutes(ongoing.start_time);
-      return {
-        status: 'now' as const,
-        event: ongoing,
-        dayLabel: 'Agora',
-        progress: Math.min(100, Math.max(0, Math.round((elapsed / total) * 100))),
-      };
+      return { status: 'now' as const, event: ongoing, dayLabel: 'Agora' };
     }
 
     const laterToday = todayEvents.find((e) => timeToMinutes(e.start_time) > nowMinutes);
     if (laterToday) {
-      return {
-        status: 'today' as const,
-        event: laterToday,
-        dayLabel: 'Hoje',
-        progress: 0,
-      };
+      return { status: 'today' as const, event: laterToday, dayLabel: 'Hoje' };
     }
 
     for (let offset = 1; offset <= 7; offset++) {
@@ -93,7 +99,6 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
           status: 'upcoming' as const,
           event: dayList[0],
           dayLabel: offset === 1 ? 'Amanhã' : DAYS_FULL_MON_FIRST[checkDay].split('-')[0],
-          progress: 0,
         };
       }
     }
@@ -143,6 +148,27 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
     setSavingGoal(false);
   };
 
+  const deleteDailyGoal = async (goal: GoalRow) => {
+    await goals.remove(goal.id);
+    showToast('Meta excluída', () => {
+      goals.insert({
+        id: goal.id,
+        text: goal.text,
+        completed: goal.completed,
+        category: goal.category,
+      });
+    });
+  };
+
+  const saveEditGoal = async () => {
+    if (!editingGoalId || !editingGoalText.trim()) {
+      setEditingGoalId(null);
+      return;
+    }
+    await goals.update(editingGoalId, { text: editingGoalText.trim() });
+    setEditingGoalId(null);
+  };
+
   const addUrgent = async () => {
     const trimmed = newUrgent.trim();
     if (!trimmed || savingUrgent) return;
@@ -156,19 +182,41 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
     setSavingUrgent(false);
   };
 
+  const deleteUrgentTask = async (task: UrgentTaskRow) => {
+    await urgentTasks.remove(task.id);
+    showToast('Pendência excluída', () => {
+      urgentTasks.insert({
+        id: task.id,
+        text: task.text,
+        completed: task.completed,
+      });
+    });
+  };
+
+  const saveEditUrgent = async () => {
+    if (!editingUrgentId || !editingUrgentText.trim()) {
+      setEditingUrgentId(null);
+      return;
+    }
+    await urgentTasks.update(editingUrgentId, { text: editingUrgentText.trim() });
+    setEditingUrgentId(null);
+  };
+
   const formatCountdown = (days: number) => {
     if (days === 0) return 'Hoje';
     if (days === 1) return 'Amanhã';
     return `Em ${days} dias`;
   };
 
+  const cardPad = compactMode ? 'p-3' : 'p-4';
+
   return (
-    <div className="space-y-5 animate-in">
+    <div className={compactMode ? 'space-y-3.5 animate-in' : 'space-y-5 animate-in'}>
       {/* Editorial Greeting */}
       <div className="pt-1">
         <p className="text-xs font-medium text-muted tracking-wide">{dateLabel}</p>
         <h1 className="font-serif text-3xl text-ink tracking-tight mt-0.5 leading-tight">
-          {greeting}, doutora.
+          {greeting}, {displayName}.
         </h1>
       </div>
 
@@ -177,7 +225,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
         <button
           type="button"
           onClick={() => onNavigate('provas')}
-          className="w-full text-left plexo-card p-4 transition-all hover:border-lineStrong group relative overflow-hidden"
+          className={`w-full text-left plexo-card ${cardPad} transition-all hover:border-lineStrong group relative overflow-hidden`}
         >
           <div
             className="absolute inset-y-0 left-0 w-1"
@@ -275,7 +323,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
       </div>
 
       {/* Live / Today's Schedule */}
-      <section className="plexo-card p-4">
+      <section className={`plexo-card ${cardPad}`}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
             <Clock size={15} className="text-accent" />
@@ -343,9 +391,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
                       <span className="font-mono text-xs text-ink2 tabular-nums">
                         {ev.start_time} — {ev.end_time}
                       </span>
-                      {duration && (
-                        <span className="text-[11px] text-muted">• {duration}</span>
-                      )}
+                      {duration && <span className="text-[11px] text-muted">• {duration}</span>}
                     </div>
                   </div>
                   <DisciplineBadge category={ev.category} customColor={ev.custom_color} />
@@ -357,7 +403,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
       </section>
 
       {/* Daily Goals */}
-      <section className="plexo-card p-4">
+      <section className={`plexo-card ${cardPad}`}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
             <Target size={15} className="text-accent" />
@@ -401,7 +447,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
         ) : (
           <div className="divide-y divide-line">
             {dailyGoals.map((goal) => (
-              <div key={goal.id} className="flex items-center gap-3 py-2.5 first:pt-1 last:pb-0">
+              <div key={goal.id} className="flex items-center gap-2.5 py-2.5 first:pt-1 last:pb-0">
                 <button
                   type="button"
                   onClick={() => goals.update(goal.id, { completed: !goal.completed })}
@@ -414,22 +460,70 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
                 >
                   {goal.completed && <Check size={13} strokeWidth={3} />}
                 </button>
-                <span
-                  onClick={() => goals.update(goal.id, { completed: !goal.completed })}
-                  className={`text-sm flex-1 cursor-pointer select-none leading-snug ${
-                    goal.completed ? 'line-through text-muted' : 'text-ink'
-                  }`}
-                >
-                  {goal.text}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => goals.remove(goal.id)}
-                  aria-label="Excluir meta"
-                  className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
-                >
-                  <Trash2 size={14} />
-                </button>
+
+                {editingGoalId === goal.id ? (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      saveEditGoal();
+                    }}
+                    className="flex items-center gap-1.5 flex-1 min-w-0"
+                  >
+                    <input
+                      type="text"
+                      autoFocus
+                      value={editingGoalText}
+                      onChange={(e) => setEditingGoalText(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Escape' && setEditingGoalId(null)}
+                      className="plexo-input flex-1 !py-1 !px-2 text-sm min-w-0"
+                    />
+                    <button
+                      type="submit"
+                      aria-label="Salvar"
+                      className="w-7 h-7 rounded-lg bg-accent text-accentFg flex items-center justify-center shrink-0"
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingGoalId(null)}
+                      aria-label="Cancelar"
+                      className="w-7 h-7 rounded-lg bg-surface2 text-muted flex items-center justify-center shrink-0"
+                    >
+                      <X size={14} />
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <span
+                      onClick={() => goals.update(goal.id, { completed: !goal.completed })}
+                      className={`text-sm flex-1 cursor-pointer select-none leading-snug ${
+                        goal.completed ? 'line-through text-muted' : 'text-ink'
+                      }`}
+                    >
+                      {goal.text}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingGoalId(goal.id);
+                        setEditingGoalText(goal.text);
+                      }}
+                      aria-label="Editar meta"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-surface2 transition-colors shrink-0"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteDailyGoal(goal)}
+                      aria-label="Excluir meta"
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -437,7 +531,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
       </section>
 
       {/* Urgent Tasks */}
-      <section className="plexo-card p-4">
+      <section className={`plexo-card ${cardPad}`}>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
             <AlertCircle size={15} className="text-warm" />
@@ -481,7 +575,7 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
             {[...urgentTasks.data]
               .sort((a, b) => Number(a.completed) - Number(b.completed))
               .map((task) => (
-                <div key={task.id} className="flex items-center gap-3 py-2.5 first:pt-1 last:pb-0">
+                <div key={task.id} className="flex items-center gap-2.5 py-2.5 first:pt-1 last:pb-0">
                   <button
                     type="button"
                     onClick={() => urgentTasks.update(task.id, { completed: !task.completed })}
@@ -494,22 +588,70 @@ export default function HojeTab({ onNavigate }: HojeTabProps) {
                   >
                     {task.completed && <Check size={13} strokeWidth={3} />}
                   </button>
-                  <span
-                    onClick={() => urgentTasks.update(task.id, { completed: !task.completed })}
-                    className={`text-sm flex-1 cursor-pointer select-none leading-snug ${
-                      task.completed ? 'line-through text-muted' : 'text-ink'
-                    }`}
-                  >
-                    {task.text}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => urgentTasks.remove(task.id)}
-                    aria-label="Excluir tarefa"
-                    className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+
+                  {editingUrgentId === task.id ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveEditUrgent();
+                      }}
+                      className="flex items-center gap-1.5 flex-1 min-w-0"
+                    >
+                      <input
+                        type="text"
+                        autoFocus
+                        value={editingUrgentText}
+                        onChange={(e) => setEditingUrgentText(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Escape' && setEditingUrgentId(null)}
+                        className="plexo-input flex-1 !py-1 !px-2 text-sm min-w-0"
+                      />
+                      <button
+                        type="submit"
+                        aria-label="Salvar"
+                        className="w-7 h-7 rounded-lg bg-accent text-accentFg flex items-center justify-center shrink-0"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingUrgentId(null)}
+                        aria-label="Cancelar"
+                        className="w-7 h-7 rounded-lg bg-surface2 text-muted flex items-center justify-center shrink-0"
+                      >
+                        <X size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <span
+                        onClick={() => urgentTasks.update(task.id, { completed: !task.completed })}
+                        className={`text-sm flex-1 cursor-pointer select-none leading-snug ${
+                          task.completed ? 'line-through text-muted' : 'text-ink'
+                        }`}
+                      >
+                        {task.text}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingUrgentId(task.id);
+                          setEditingUrgentText(task.text);
+                        }}
+                        aria-label="Editar pendência"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-ink hover:bg-surface2 transition-colors shrink-0"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteUrgentTask(task)}
+                        aria-label="Excluir tarefa"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors shrink-0"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </>
+                  )}
                 </div>
               ))}
           </div>
