@@ -1,0 +1,191 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+[data-theme='dark'] {
+  --bg: #0d1117;
+  --surface: #141a22;
+  --surface-2: #1c2430;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text: #f1f5f9;
+  --text-secondary: #9aa7b8;
+  --text-muted: #64748b;
+  --accent: #2dd4bf;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --accent-fg: #042f2e;
+  --warm: #f59e0b;
+  --danger: #fb7185;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg: #f6f4ee;
+  --surface: #ffffff;
+  --surface-2: #efece3;
+  --border: rgba(22, 26, 30, 0.09);
+  --border-strong: rgba(22, 26, 30, 0.16);
+  --text: #161a1e;
+  --text-secondary: #475569;
+  --text-muted: #7b8694;
+  --accent: #0f766e;
+  --accent-soft: rgba(15, 118, 110, 0.1);
+  --accent-fg: #ffffff;
+  --warm: #d97706;
+  --danger: #e11d48;
+  --shadow-card: 0 1px 3px rgba(22, 26, 30, 0.05), 0 1px 1px rgba(22, 26, 30, 0.03);
+  --shadow-sheet: 0 -8px 32px rgba(22, 26, 30, 0.16);
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation: fadeSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@layer components {
+  .plexo-card {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-card);
+    border-radius: 16px;
+  }
+
+  .plexo-input {
+    background-color: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 12px;
+    padding: 0.625rem 0.875rem;
+    font-size: 0.875rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .plexo-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .plexo-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .plexo-btn-primary {
+    background-color: var(--accent);
+    color: var(--accent-fg);
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 0.875rem;
+    padding: 0.625rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    transition: opacity 0.15s ease, transform 0.1s ease;
+  }
+
+  .plexo-btn-primary:hover:not(:disabled) {
+    opacity: 0.92;
+  }
+
+  .plexo-btn-primary:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .plexo-btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .plexo-btn-ghost {
+    background-color: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    font-weight: 500;
+    font-size: 0.875rem;
+    padding: 0.55rem 0.9rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+  }
+
+  .plexo-btn-ghost:hover {
+    border-color: var(--border-strong);
+  }
+
+  .plexo-btn-ghost:active {
+    transform: scale(0.98);
+  }
+
+  .pb-safe {
+    padding-bottom: max(0.6rem, env(safe-area-inset-bottom));
+  }
+}
